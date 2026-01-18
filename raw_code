@@ -1,0 +1,1360 @@
+"""***GeneNBHD***"""
+"""GeneNBHD Python script for visualisation of gene neighbourhoods"""
+
+"""For gene neighbourhood visualisation, the script requires at least one protein sequence ID (NCBI accession number).
+""" Prior to using the script, the user must edit the script to reflect the relevant folder path, fileW name (where the diagram will be saved),
+""" and NCBI accession number(s) to be visualised:
+"""    • Folder path is located under point (1) in the script, under def main(): function;
+"""    • fileW name (name for the file where the diagram will be saved) is located under point (15) in the script;
+"""    • NCBI accession numbers must be entered under """LISTS WITH DATA""" in the script, between the brackets, with appropriate text indentation, as follows:
+"""      ACCESSIONS = [
+"""            'AAN68390.1', # P. putida TAm
+"""            'WP_115487167.1', # P. fluorescens TAm
+"""                   ]
+""" Text after a hashtag is a comment and can be edited or removed.
+""" On running the script, the user will be prompted to enter a number of ORFs to be viewed (1) upstream, and
+""" (2) downstream of the homolog/sequence of interest. These numbers must be integers. The script builds a gene
+""" neighbourhood diagram for each homolog in a provided list, fetching data directly from Entrez/NCBI,
+""" aligning homologs such that the user can see the upstream and downstream entries relative to other
+""" neighbourhoods. The size ratios between all ORFs are real. For large lists, or where there are many
+""" identical proteins for a single entry in the NCBI database, there may be delays as the processing is
+""" subject to data download and internet/intranet speed.
+""" The script was written using PyCharm virtual environment 2018.2.3. (Community edition), using Python 2.7 as the Project Interpreter.
+
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""Import modules"""
+
+import matplotlib.pyplot as plt
+import numpy
+import pandas as pd
+import operator
+import os
+import re
+import subprocess, os
+import textwrap
+import time
+from Bio import Entrez
+from Bio import SeqIO
+from Bio.Alphabet import IUPAC
+from Bio.Alphabet import generic_dna
+from Bio.Blast.Applications import NcbiblastxCommandline
+from Bio.Graphics import GenomeDiagram
+from Bio.Seq import Seq
+from Bio.SeqFeature import SeqFeature, FeatureLocation
+from Bio.SeqFeature import BeforePosition, AfterPosition
+from Bio.SeqIO import FastaIO
+from Bio.SeqRecord import SeqRecord
+from reportlab.lib import colors
+from reportlab.lib.units import cm
+from time import gmtime, strftime
+from tqdm import tqdm
+
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""ID for NCBI"""
+
+Entrez.email = 'name.surname@organisation.org'
+
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+
+"""FUNCTIONS"""
+
+def record_to_file(folder, file_title, raw_records):
+    """Records raw data to a text file"""
+    file_name = str(file_title) + '.txt'
+    pathway = folder + file_name
+    file = open(pathway, 'w+')
+    file.write(str(raw_records))
+    file.close()
+
+def record_data_to_file(folder, file_title, line1, line2, line3, line4, line5, raw_data):
+    """Records raw data to a text file. The five lines (line1-5) can be single strings
+    and raw data can be a table/dataframe."""
+    file_name = str(file_title) + '.txt'
+    pathway = folder + file_name
+    file = open(pathway, 'w+')
+    file.write(str(line1))
+    file.write(str(line2))
+    file.write(str(line3))
+    file.write(str(line4))
+    file.write(str(line5))
+    file.write(str(raw_data))
+    file.close()
+
+def write_gb_file(folder, accession, raw_records):
+    """Records raw data to a .gb file"""
+    file_name = str(accession) + '.gb.txt'
+    pathway = folder + file_name
+    file = open(pathway, 'w+')
+    file.write(str(raw_records.read()))
+    file.close()
+
+def file_readlines(folder, accession):
+    """Reads a text file line by line"""
+    file_name = folder + accession + '.txt'
+    file = open(file_name, 'r')
+    raw_records = file.readlines()[1:]
+    file.close()
+    return raw_records
+
+def input_number(number):
+    """Requests an input (a number). The function is used to request
+    the number of ORFs to include on either side of a homolog."""
+    while True:
+        try:
+            user_input = int(input(number))
+        except ValueError:
+            print("Not an integer! Try again.")
+            continue
+        else:
+            return user_input
+            break
+
+def parse_file(folder, accession):
+    """Parses text files:
+    :param folder; accession (file name)
+    :returns: data downloaded from the identical protein group database in lists:
+    ids, source, nucleotide, accession, nt_seq_start, nt_seq_stop, protein, strand,
+    protein name, organism, strain, assembly."""
+
+    """reads file line by line"""
+    raw_records = file_readlines(folder, accession)
+
+    parse_file_id_list = []
+    parse_file_source_list = []
+    parse_file_nucleotide_accession_list = []
+    parse_file_nt_seq_start_list = []
+    parse_file_nt_seq_stop_list = []
+    parse_file_strand_list = []
+    parse_file_protein_accession_list = []
+    parse_file_protein_name_list = []
+    parse_file_organism_list = []
+    parse_file_strain_list = []
+    parse_file_assembly_list = []
+
+    """for each line, the data is split by tab or space and the data is added to the relevant list."""
+    for line in raw_records:
+        data = line.split('\t') or line.split(' ') or line.split('')
+        """print(data)"""
+        parse_file_id_list.append(int(data[0]))
+        parse_file_source_list.append(str(data[1]))
+        parse_file_nucleotide_accession_list.append(str(data[2]))
+        parse_file_nt_seq_start_list.append(int(data[3]))
+        parse_file_nt_seq_stop_list.append(int(data[4]))
+        parse_file_strand_list.append(str(data[5]))
+        parse_file_protein_accession_list.append(str(data[6]))
+        parse_file_protein_name_list.append(str(data[7]))
+        parse_file_organism_list.append(str(data[8]))
+        parse_file_strain_list.append(str(data[9]))
+        parse_file_assembly_list.append(str(data[10]))
+
+    parse_file_aa_len_list = []
+    """calculates and appends calculated protein size values to the list"""
+    for entry in range(0, len(parse_file_nt_seq_start_list)):
+        parse_file_aa_len_list.append(int((parse_file_nt_seq_stop_list[entry] -
+                                           parse_file_nt_seq_start_list[entry] + 1 - 3) / 3))
+
+    """can switch printing of results on / off to check what is being added."""
+
+    # print data output to screen
+    # print('\nNucleotide Accession(s)')
+
+    # print(nucleotide_accession)
+    # print('\nProtein Accession(s):')
+
+    # print(protein_accession)
+    # print('\nProtein length (aa):')
+
+    # print(aa_len_list)
+
+    return parse_file_id_list, parse_file_source_list, parse_file_nucleotide_accession_list, \
+           parse_file_nt_seq_start_list, parse_file_nt_seq_stop_list, parse_file_strand_list, \
+           parse_file_protein_accession_list, parse_file_protein_name_list, parse_file_organism_list, \
+           parse_file_strain_list, parse_file_assembly_list, parse_file_aa_len_list
+
+
+def parse_gb_file(folder, file):
+    """Parses .gb files:
+    :param folder; file name
+    :returns: lists of feature start and end coordinates, protein id, protein name, feature strand."""
+    file_name = folder + file
+
+    """file is parsed using SeqIO"""
+    genome_info = SeqIO.parse(file_name, "genbank")
+    record = SeqIO.read(file_name, "genbank")
+
+    feature_start_list = []
+    feature_end_list = []
+    protein_id_list = []
+    protein_name_list = []
+    feature_strand_list = []
+
+    """organism = source"""
+    organism = record.annotations['organism']
+    source = record.annotations['source']
+
+    """for each entry, if entry type is a CDS, then add data to the relevant list"""
+    for entry in genome_info:
+        if entry.features:
+            for feature in entry.features:
+                if feature.type == "CDS":
+                    """try function allows adding features if they available and skips if not"""
+                    try:
+                        feature_start = feature.location.start.position
+                        feature_start_list.append(feature_start)
+
+                        feature_end = feature.location.end.position
+                        feature_end_list.append(feature_end)
+
+                        protein_id = feature.qualifiers['protein_id']
+                        protein_name = feature.qualifiers['product']
+                        feature_strand = feature.strand
+
+                        """* operator 'delists'"""
+                        protein_id_list.append(*protein_id)
+                        protein_name_list.append(*protein_name)
+                        feature_strand_list.append(feature_strand)
+
+                    except KeyError:
+                        protein_id = 'no_entry'
+                        protein_name = 'unknown'
+                        feature_strand = 0
+
+                        protein_id_list.append(protein_id)
+                        protein_name_list.append(protein_name)
+                        feature_strand_list.append(feature_strand)
+
+    return organism, source, feature_start_list, feature_end_list, protein_id_list, \
+           protein_name_list, feature_strand_list
+
+
+
+def dataframe_synt(id, source, nucleotide_accession, nt_seq_start, nt_seq_stop, strand,
+                      protein_accession, protein_name, organism, strain, assembly, aa_len_list):
+    """Formats the data into a table with input variables being columns"""
+
+    """data formatted as dictionary"""
+    all_data = {
+        'Id': id, 'Source': source, 'Nucleotide_Accession': nucleotide_accession,
+        'Start': nt_seq_start, 'Stop': nt_seq_stop, 'Strand': strand,
+        'Protein_Accession': protein_accession, 'Protein_Name': protein_name,
+        'Organism': organism, 'Strain': strain, 'Assembly': assembly, 'AA_Len': aa_len_list
+    }
+
+    """options for visualisation of max number of rows and columns"""
+    pd.set_option('display.max_rows', 100000)
+    pd.set_option('display.max_columns', 10000)
+
+    """generate table using pandas (pd) DataFrame"""
+    data_table = pd.DataFrame(all_data)
+
+    """list of the desired column order"""
+    column_order = [
+        'Id', 'Source', 'Nucleotide_Accession', 'Start', 'Stop', 'Strand',
+        'Protein_Accession', 'Protein_Name', 'Organism', 'Strain', 'Assembly', 'AA_Len'
+    ]
+
+    """reindex data according to the (new) column order"""
+    data_table_reordered = data_table.reindex(columns=column_order)
+
+    return data_table_reordered
+
+
+
+def dataframe_temp(
+        protein_id_list, protein_name_list, feature_start_list, feature_end_list, feature_strand_list):
+    """Formats the data into a table with input variables being columns"""
+
+    """options for visualisation of max number of rows and columns"""
+    pd.set_option('display.max_rows', 1000000)
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.expand_frame_repr', False)
+    pd.set_option('max_colwidth', -1)
+
+    """data formatted as dictionary"""
+    all_data = {
+        'Protein_ID_list': protein_id_list, 'Protein_Name_list': protein_name_list,
+        'ORF_Start_nt_list': feature_start_list, 'ORF_End_nt_list': feature_end_list,
+        'Strand_list': feature_strand_list
+    }
+
+    """generate table using pandas (pd) DataFrame"""
+    data_table = pd.DataFrame(all_data)
+
+    """list of the desired column order"""
+    column_order = [
+        'Protein_ID_list', 'Protein_Name_list',
+        'ORF_Start_nt_list', 'ORF_End_nt_list', 'Strand_list'
+    ]
+
+    """reindex data according to the (new) column order"""
+    data_table_reordered = data_table.reindex(columns=column_order)
+
+    return data_table_reordered
+
+
+def find_accession(accession, genome):
+    """Finds/returns first item in sequence where f(item) == True."""
+    for CDS in genome:
+        if accession == CDS:
+            return CDS
+
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""DICTIONARIES WITH DATA"""
+
+"""NAME_COLOUR_DICT generates abbreviations (via value[0]) for the most common proteins
+   ('keys' are used as search terms to search protein names using re.search; 'values[0]'
+   are used to replace the name and 'values[1]' are used to provide feature/ORF colour)."""
+
+NAME_COLOUR_DICT = {
+    '(hypothetical|unknown)':                                                       ['hypothetical',            'black'],
+    '(transaminase|aminotransferase)':                                              ['TAm',                     'red'],
+    '(acyl |Acyl )(carrier protein)':                                               ['ACP',                     'yellow'],  # bright yellow
+    '(carboxylesterase|Carboxylesterase)':                                          ['carboxylesterase',        'darkgoldenrod'],  # kind of orange
+    '(thioesterase)':                                                               ['thioesterase',            'gold'],  # dark yellow
+    '(aminomethyltransferase)':                                                     ['aminomethyltransferase',  'goldenrod'], # kind of dark yellow
+    '(methyltransferase)':                                                          ['methyltransferase',       'darkorange'],  # kind of orange
+    '(phosphotransferase)':                                                         ['phosphotransferase',      'orangered'],  # kind of orange
+    # '(transferase)':                                                                ['transferase',             'orange'], # kind of orange
+    '(kinase)':                                                                     ['kinase',                  'chocolate'],  # kind of orange
+    '(beta|Beta)(-| )(ketoacyl-|ketoacyl )(\[acyl-carrier-protein\] |)(synthase)':  ['KS',                      'lime'],
+    '(3-oxoacyl-|3-oxoacyl )(\[acyl-carrier-protein\] |\[Acyl-carrier-protein\] |\[Acyl-Carrier-Protein\] |ACP |)(synthase)':
+                                                                                    ['KS',                      'lime'],
+    '(thiamine phosphate|7-carboxy-7-deazaguanine|thiamine phosphate) (synthase)':  ['synthase',                'mediumspringgreen'],
+    '(cyclase)':                                                                    ['cyclase',                 'deepskyblue'],
+    '(isomerase)':                                                                  ['isomerase',               'lightslategray'],
+    '(epimerase|-epimerase)':                                                       ['epimerase',               'tan'],
+    '(CoA ligase)':                                                                 ['fatty acyl-CoA ligase',   'darkgreen'],
+    '(tRNA ligase)':                                                                ['tRNA ligase',             'green'],
+    '(peptidase)':                                                                  ['peptidase',               'pink'],
+    '(ammonia-|ammonia )(lyase)':                                                   ['ammonia-lyase',           'royalblue'],
+    '(decarboxylase)':                                                              ['decarboxylase',           'magenta'],
+    '(dehydrogenase)':                                                              ['dehydrogenase',           'plum'],  # light purple
+    '( reductase)':                                                                 ['reductase',               'mediumorchid'],  # purple
+    '(oxidoreductase|Oxidoreductase)':                                              ['oxidoreductase',          'orchid'],  # mediumpurple
+    '(monooxygenase)':                                                              ['monooxygenase',           'lightblue'],  # light blue
+    '(hydratase)':                                                                  ['hydratase',               'darkcyan'],
+    '(hydrolase)':                                                                  ['hydrolase',               'cyan'],
+    '(phosphatase)':                                                                ['phosphatase',             'paleturquoise'],
+    '(cytochrome)':                                                                 ['cytochrome',              'saddlebrown'],  # kind of dark red
+    '(ferredoxin)':                                                                 ['ferredoxin',              'crimson'],  # bright red/pink
+    '(heme|Heme) (receptor)':                                                       ['heme receptor',           'sandybrown'],
+    '(flavodoxin)':                                                                 ['flavodoxin',              'brown'],
+    '(RNA polymerase)':                                                             ['RNA polymerase',          'purple'],
+    '(DNA polymerase)':                                                             ['DNA polymerase',          'darkmagenta'],
+    '(transcriptional|Transcriptional) (regulator)':                                ['transcriptional reg',     'midnightblue'],  # dark blue
+    '(recombinase)':                                                                ['recombinase',             'maroon'],
+    '(transporter|permease|exporter)':                                              ['transporter',             'lightgrey'],
+    '(antiporter)':                                                                 ['antiporter',              'darkgrey'],
+    '(membrane)':                                                                   ['membrane protein',        'grey'],
+    '(cell envelope)':                                                              ['cell envelope protein',   'dimgrey'],
+    '(sensory box)':                                                                ['sensory box protein',     'white'],
+    '(ATPase)':                                                                     ['ATPase',                  'white'],
+    '(ATP-binding protein)':                                                        ['ATP-binding',             'white'],
+    '(GTP-binding protein)':                                                        ['GTP-binding',             'white'],
+    '(ATP/GTP-binding protein)':                                                    ['ATP/GTP-binding',         'white'],
+    '(secretion)':                                                                  ['secretion protein',       'white'],
+    '(lipoprotein-sorting)':                                                        ['lipoprotein-sorting',     'white'],
+    '(lipoprotein)':                                                                ['lipoprotein',             'white'],
+    '(helicase)':                                                                   ['helicase',                'white'],
+}
+
+
+"""REPLACEMENT_DICT is used to search and replace specific terms in protein names. 'Key' terms are search terms to
+   search protein names using re.search; 'values[0]' are actual strings to be replaced, and 'value[1]' is the actual
+   text values[0] strings are replaced with."""
+
+REPLACEMENT_DICT = {
+        '(domain-containing)':  ['domain-containing',   'd.c.'],
+        '(binding protein)':    ['binding protein',     'binding'],
+        '(protein)':            [' protein',            ''],
+        '(Protein )':           ['Protein ',            ''],
+    }
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""LISTS WITH DATA"""
+
+"""Protein accession numbers that are used as input"""
+
+ACCESSIONS = [
+
+    # 'WP_010953693.1',
+
+]
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""EMPTY LISTS"""
+
+"""These lists are populated when the program runs"""
+
+id_list = []
+source_list = []
+nucleotide_list = []
+accession_list = []
+start_list = []
+stop_list = []
+strand_list = []
+protein_list = []
+protein_name_list = []
+organism_list = []
+strain_list = []
+assembly_list = []
+
+nuc_acc_to_use = []
+original_acc_to_use = []
+prot_acc_to_use = []
+total_orfs_to_use = []
+prot_index_to_use = []
+
+synt_feature_start_u = []
+synt_feature_end_u = []
+synt_feature_size_nt_u = []
+synt_feature_size_aa_u = []
+distance_between_features_nt_u = []
+synt_protein_id_u = []
+synt_protein_name_u = []
+synt_strand_u = []
+
+list_of_dicts = []
+
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+
+"""MAIN FUNCTION"""
+
+"""
+(1) Two integers are requested from the user to determine the number of ORFs to be viewed upstream and downstream of
+    the homolog.
+(2) For each accession in the list, the script finds identical proteins via Entrez/NCBI, to obtain genome nucleotide
+    accession references; it then saves the information to a file.
+(3) Parses data from Identical Protein Group file and creates lists for data mining.
+(4) For each nucleotide accession reference found in the identical protein group list (3), the script downloads GenBank
+    gb data from NCBI/Entrez and saves it to a file.
+(5) Each gb file is parsed to get organism name, source, CDS start, CDS end, CDS/protein id, CDS/protein name, and
+    strand. Organism = source.
+(6) For each protein accession in the identical protein group list, the script checks if that protein is present in the
+    gb file.
+(7) If that protein accession ref is present in the nucleotide accession gb file, the protein accession index (i.e. an
+    ORF position in the nucleotide accession gb file) and the total number of ORFs/CDSs and noted. The script then
+    populates various lists with the following data: protein accessions, nucleotide accessions, original protein (WP)
+    accessions (alongside cross-referenced protein accessions - as these may or may not be the same), protein accession
+    indices, and the total number of proteins/CDSs in the given gb file.
+(8) To select the most relevant nucleotide accession for each cross-referenced homolog (protein accession), the list
+    with the TOTAL NUMBER OF ORFs is searched (to identify a nucleotide accession with the greatest number of ORFs).
+    The associated nucleotide accession ref, protein accession ref, index of the protein accession in the nucleotide
+    accession gb file, and the original protein accession ref are identified.
+(9) Creates a list of all the most relevant nucleotide accessions; their associated original protein accessions,
+    cross-referenced protein accessions, the total number of ORFs, and cross-referenced protein indices. Only these
+    accessions are used subsequently.
+(10)Data is parsed for Gene Neighbourhoods.
+(11)For each nucleotide accession in the nucleotide accessions list from (9), the script parses the associated gb file
+    (which should have been saved by the program in the folder of choosing), to extract nucleotide accession organism,
+    nucleotide accession source (source == organism most of the time), all CDS/protein ids, their start and end nts,
+    CDS/protein names and strand of each CDS/protein.
+(12)Finds PROTEIN/HOMOLOG start and end positions in FEATURE START/END lists (generated in section 10) using the looked
+    up index from the PROTEIN INDEX TO USE list (generated in section 9(e)). The relevant PROTEIN INDEX (aka protein
+    position in the nucleotide accession) is looked up using [i] (used as an index position through iteration) in the
+    relevant "list_to_use". Reminder: items in nuc_acc_to_use[x], prot_acc_to_use[x], prot_index_to_use[x] correspond
+    to each other through 'x' index/position in the list.
+(13)Using the HOMOLOG INDEX/POSITION, a gene cluster range to be visualised is determined.
+(14)For each ORF in the gene cluster range, the key data (feature start/end nts, protein id, protein name and protein
+    strand) is looked up/calculated and appended to lists.
+(15)Using a Biopython Module GenomeDiagram, a Gene Neighbourhood diagram is drawn and saved to a file.
+
+
+"""
+
+"""------------------------------------------------------------------------------------------------------------------"""
+
+def main():
+
+    """This is the main function; it contains all the necessary commands for program execution."""
+
+    """------------------------------------------------------------------------------"""
+    """(1) Two integers are requested from the user to determine the number of ORFs to be viewed upstream and downstream
+       of the homolog."""
+
+    m = input_number("Enter a number of ORFs to be viewed upstream of the homolog (must be an integer): ")
+    n = input_number("Enter a number of ORFs to be viewed downstream of the homolog (must be an integer): ")
+
+    """folder for where the files are saved to and read from"""
+    folder = '/Users/PyhtonProg/'
+
+
+    """------------------------------------------------------------------------------"""
+    """(2) For each accession in the list, the script finds identical proteins via Entrez/NCBI, to obtain genome
+       nucleotide accession references; it then saves the information to a file."""
+
+    for accession in ACCESSIONS:
+
+        print('Assessing what data is required...')
+
+        """These lists are populated when the program runs"""
+        original_prot_acc_list = []
+        nuc_acc_list = []
+        prot_acc_list = []
+        prot_acc_index_list = []
+        total_number_of_orfs_list = []
+
+        """checks if the file with the required name already exists; if not, downloads the data from NCBI/Entrez and
+           saves to a file"""
+        file_name_0 = str(accession) + '.txt'
+        pathway_0 = folder + file_name_0
+        if not os.path.exists(pathway_0):
+            handle1 = Entrez.efetch(db="sequences", id=accession, rettype='ipg', retmode="text")
+            print('Downloading data for ' + str(accession) + ' from Identical Proteins Group Database...')
+            result = handle1.read()
+            record_to_file(folder, accession, result)
+            handle1.close()
+
+            """A pause - to ensure Entrez/NCBI doesn't complain"""
+            time.sleep(5)
+
+        """can print results if necessary"""
+        # print('\n\n======\n')
+        #  print(result)
+        # print('\n\n======\n')
+
+
+        """------------------------------------------------------------------------------"""
+        """(3) Parses data from Identical Protein Group file and creates lists for data mining."""
+
+        """the below variables are lists created by reading files saved under section (2): id #, source (RefSeq/INSDC),
+           nucleotide accession ref, protein start and stop nt location, strand, protein accession ref, protein name,
+           organism, strain and assembly accession ref"""
+        id_list, source_list, nucleotide_accession_list, nt_seq_start_list, nt_seq_stop_list, \
+        strand_list, protein_accession_list, protein_name_list, organism_list, strain_list, \
+        assembly_list, aa_len_list = parse_file(folder, accession)
+
+        """if the data could not be downloaded from the Identical Proteins Group Database, the lists are empty, and thus
+           the homolog/accession entry must be skipped"""
+        if id_list == []:
+            print('Could not download data from Identical Proteins Group Database for ' + str(accession) +
+                  '. Skipping entry.')
+
+            """removes the empty file from the folder"""
+            os.remove(pathway_0)
+
+        """can visualise data as a table if necessary"""
+        """(generates a dataframe to arrange data in a table)"""
+        # table1 = dataframe_synt(id_list, source_list, nucleotide_accession_list, nt_seq_start_list,
+        # nt_seq_stop_list, strand_list, protein_accession_list, protein_name_list, organism_list, strain_list,
+        # assembly_list, aa_len_list)
+        # print('\n\n======\n')
+        # print(table1)
+        # print('\n\n======\n')
+
+
+        """------------------------------------------------------------------------------"""
+        """(4) For each nucleotide accession reference found in the identical protein group list (3), the script
+           downloads GenBank gb data from NCBI/Entrez and saves it to a file."""
+
+        """For non-empty nucleotide accessions lists..."""
+        if nucleotide_accession_list <> []:
+
+            """for each nucleotide accession in the nucleotide accessions list..."""
+            for nuc_acc in nucleotide_accession_list:
+                """checks if the file with the required name already exists; if not, downloads the data from NCBI/Entrez
+                   and saves to a file """
+                file_name_1 = str(nuc_acc) + '.gb.txt'
+                pathway_1 = folder + file_name_1
+                if not os.path.exists(pathway_1):
+                    handle2 = Entrez.efetch(db='nucleotide', id=nuc_acc, retmode="text", rettype='gbwithparts')
+                    print('Downloading data for ' + str(nuc_acc) + ' from GenBank...')
+                    write_gb_file(folder, nuc_acc, handle2)
+                    handle2.close()
+
+                    """Pause to ensure Entrez/NCBI doesn't complain"""
+                    time.sleep(10)
+
+                """--------------------------------------------------------------------------"""
+                """(5) Each gb file is parsed to get organism name, source, CDS start, CDS end, CDS/protein id,
+                   CDS/protein name, and strand. Organism = source."""
+                gb_file_1 = str(nuc_acc) + '.gb.txt'
+                nuc_acc_organism, nuc_acc_source, feature_start_list, feature_end_list, protein_id_list, \
+                protein_name_list, feature_strand_list = parse_gb_file(folder, gb_file_1)
+
+                """can print results to visualise data if necessary"""
+
+                # print('\n\n======\n')
+                # print('\nNucleotide Accession:')
+                # print(nuc_acc)
+
+                # print('\nNuc Acc Organism:')
+                # print(nuc_acc_organism)
+
+                # print('\nNuc Acc Source:')
+                # print(nuc_acc_strain)
+
+                # print('\nFeature Start:')
+                # print(feature_start_list)
+
+                # print('\nFeature End:')
+                # print(feature_end_list)
+
+                # print('\nProtein IDs:')
+                # print(protein_id_list)
+
+                # print('\nProtein name(s):')
+                # print(protein_name_list)
+
+                # print('\nFeature Strand:')
+                # print(feature_strand_list)
+                # print('\n\n======\n')
+
+
+                """--------------------------------------------------------------------------"""
+                """(6) For each protein accession in the identical protein group list above, the script checks if that
+                   protein accession is present in the associated nucleotide accession gb file."""
+                for prot_acc in protein_accession_list:
+                    prot_acc_return = find_accession(prot_acc, protein_id_list)
+
+
+                    """----------------------------------------------------------------------"""
+                    """(7) If that protein accession ref is present in the nucleotide accession gb file, the protein
+                       accession index (i.e. an ORF position in the nucleotide accession gb file) and the total number
+                       of ORFs/CDSs and noted. The script then populates various lists with the following data:
+                       protein accessions, nucleotide accessions, original protein (WP) accessions (alongside
+                       cross-referenced protein accessions - as these may or may not be the same),
+                       protein accession indices, and the total number of proteins/CDSs in the given gb file."""
+                    if prot_acc_return <> None:
+                        """(a) index number of the homolog/accession in a genome/gb file"""
+                        protein_accession_index = protein_id_list.index(prot_acc)
+
+                        """(b) total number of proteins in a genome"""
+                        total_number_of_orfs = len(protein_id_list)
+
+                        """(c) list of original protein accession refs"""
+                        original_prot_acc_list.append(accession)
+
+                        """(d) list of gb nucleotide accession refs"""
+                        nuc_acc_list.append(nuc_acc)
+
+                        """(e) list of cross-ref protein accession refs"""
+                        prot_acc_list.append(prot_acc)
+
+                        """(f) list of cross-ref protein indices"""
+                        prot_acc_index_list.append(protein_accession_index)
+
+                        """(g) list of total number of proteins/ORFs in that gb file"""
+                        total_number_of_orfs_list.append(total_number_of_orfs)
+
+
+                        """To visualise data if necessary, can print inidividual nucleotide accession (section 4),
+                           original protein accession (section 2), cross-ref protein accession (section 6),
+                           cross-ref protein match (section 6), cross-referenced protein's accession index (section 7(a)),
+                           and protein id corresponding to the cross-referenced protein's accession index (all should match)
+                           """
+
+                        # print('\n\n======\n')
+                        # print('\nNucleotide Accession')
+                        # print(nuc_acc)
+
+                        # print('\nOriginal Protein ID')
+                        # print(accession)
+
+                        # print('\nProtein ID')
+                        # print(prot_acc)
+
+                        # print('\nProtein match')
+                        # print(prot_acc_return)
+
+                        # print('\nAccession Index')
+                        # print(protein_accession_index)
+
+                        # print('\nProtein ID corresponding to the Accession Index')
+                        # print(protein_id_list[protein_accession_index])
+                        # print('\n\n======\n')
+
+
+                        """if an identical protein with a different protein accession reference is present in that gb
+                           file, can print: a list of ALL ORFs that are present in that nucleotide accession, as well
+                           as the protein/feature name, protein/feature strand, protein/feature start and end nts
+                           (all from section 5)"""
+                        # print('\n\n======\n')
+                        # print(protein_id_list)
+                        # print(protein_name_list)
+                        # print(feature_start_list)
+                        # print(feature_end_list)
+                        # print(feature_strand_list)
+                        # print('\n\n======\n')
+
+            """For nuc_acc FOR LOOP, for cross-referenced entries only (i.e. where a protein accession was
+               cross-referenced to a given nucleotide accession) can print final lists: of all nucleotide accessions
+               (section 7(d)), original proteins (section 7(c)), protein accessions (section 7(e)), protein positions
+               in the the associated nucleotide accession gb file (section 7(f)), and the total numbers of ORFs in each
+               of the nucleotide accession gb files (section 7(g))"""
+            # print('\n\n======\n')
+            # print(nuc_acc_list)
+            # print(original_prot_acc_list)
+            # print(prot_acc_list)
+            # print(prot_acc_index_list)
+            # print(total_number_of_orfs_list)
+            # print('\n======\n')
+
+            """-----------------------------------------------------------------------------"""
+            """(8) To select the most relevant nucleotide accession for each cross-referenced homolog (protein
+               accession), the list with the TOTAL NUMBER OF ORFs is searched (to identify a nucleotide accession with
+               the greatest number of ORFs). The associated nucleotide accession ref, protein accession ref, index of
+               the protein accession in the nucleotide accession gb file, and the original protein accession ref are
+               identified."""
+
+            """(a) IDENTIFIES the LARGEST ENTRY in the list with the TOTAL NUMBER OF PROTEINS/ORFs, f.e. 5000 ORFs"""
+            largest_entry_in_total_number_of_orfs_list = int(max(total_number_of_orfs_list))
+
+            """(b) IDENTIFIES the INDEX (i.e. position in the list; f.e. position 2) of this LARGEST ENTRY
+               (i.e. 5000 ORFs) in the list with the TOTAL NUMBER OF PROTEINS/ORFs"""
+            total_number_of_orfs_list_index = total_number_of_orfs_list.index(largest_entry_in_total_number_of_orfs_list)
+
+            """(c) Using the IDENTIFIED INDEX (i.e. position 2), LOOKS UP the related PROTEIN/HOMOLOG ACCESSION INDEX
+               entry (f.e. 2830) in the PROTEIN ACCESSION INDEX/POSITION LIST"""
+            largest_entry_in_prot_acc_index_list = int(prot_acc_index_list[total_number_of_orfs_list_index])
+
+            """(d) Using the IDENTIFIED INDEX (i.e. position 2), LOOKS UP the related NUCLEOTIDE ACCESSION entry in the
+               NUCLEOTIDE ACCESSION REFs list"""
+            largest_nuc_acc = nuc_acc_list[total_number_of_orfs_list_index]
+
+            """(e) Using the IDENTIFIED INDEX (i.e. position 2), LOOKS UP the related PROTEIN ACCESSION entry in the
+               PROTEIN ACCESSION REFs list"""
+            largest_prot_acc = prot_acc_list[total_number_of_orfs_list_index]
+
+            """(f) Using the IDENTIFIED INDEX (i.e. position 2), LOOKS UP the related ORIGINAL ACCESSION entry in the
+               ORIGINAL ACCESSION REFs list"""
+            largest_original_acc = original_prot_acc_list[total_number_of_orfs_list_index]
+
+
+            """can print the largest entry in total number of ORFs list (section 8(a)), it's index in the list
+               (section 8(b)), and cross-referenced entries in the protein accession index list (section 8(c)),
+               nucleotide accession list (section 8(d)), protein accession list (section 8(e)), and original protein
+               accession list (section 8(f))"""
+            # print('\n======\n')
+            # print(largest_entry_in_total_number_of_orfs_list)
+            # print(total_number_of_orfs_list_index)
+            # print(largest_entry_in_prot_acc_index_list)
+            # print(largest_nuc_acc)
+            # print(largest_prot_acc + " represented by non-redundant " + largest_original_acc)
+            # print('\n======\n')
+
+            """-----------------------------------------------------------------------------"""
+            """(9) Creates a list of all the most relevant nucleotide accessions; their associated original protein
+               accessions, cross-referenced protein accessions, the total number of ORFs, and cross-referenced protein
+               indices. Only these accessions are used subsequently."""
+
+            """(a) creates list of nucleotide accessions to use"""
+            nuc_acc_to_use.append(largest_nuc_acc)
+
+            """(b) creates list of original accessions to use"""
+            original_acc_to_use.append(largest_original_acc)
+
+            """(c) creates list of protein accessions to use"""
+            prot_acc_to_use.append(largest_prot_acc)
+
+            """(d) creates list of total ORFs in the nucleotide accession gb files"""
+            total_orfs_to_use.append(largest_entry_in_total_number_of_orfs_list)
+
+            """(e) creates list of protein/homolog indices"""
+            prot_index_to_use.append(largest_entry_in_prot_acc_index_list)
+
+        else:
+            pass
+
+    """can print lists of nucleotide accessions (section 8(a)), protein accessions (section 8(c)), original protein
+       accessions (section 8(b)), total ORFs in the nucleotide accessions (section 8(d)) and protein/homolog indices
+       (section 8(e)) to be used subsequently"""
+    print('\n======\n')
+    print(nuc_acc_to_use)
+    print(prot_acc_to_use)
+    print(original_acc_to_use)
+    print(total_orfs_to_use)
+    print(prot_index_to_use)
+    print('\n======\n')
+
+
+    """------------------------------------------------------------------------------"""
+    """(10) Data is parsed for Gene Neighbourhoodsynt."""
+
+    print('Making some calculations...')
+    """These lists are populated when the program runs"""
+    p_list = []
+    homolog_start_list = []
+    upstream_nt_start_list = []
+    q_list = []
+    homolog_end_list = []
+    downstream_nt_end_list = []
+    gene_cluster_size_list = []
+    diff_homolog_start_to_upstream_start_list = []
+    diff_homolog_end_to_downstream_start_list = []
+    organism_list = []
+
+    synt_accessions_start_range_list_of_lists = []
+    synt_accessions_end_range_list_of_lists = []
+    synt_protein_id_range_list_of_lists = []
+    synt_protein_name_range_list_of_lists = []
+    synt_strand_range_list_of_lists = []
+
+
+    """To count the number of iterations within the FOR LOOP (see below), to keep track of list indices, an 'i'
+       variable is introduced here"""
+    i = 0  # keep here
+
+    """------------------------------------------------------------------------------"""
+    """(11) For each nucleotide accession in the nucleotide accessions list from (section 9),"""
+
+    for nuc_acc_2 in nuc_acc_to_use:
+
+        """These lists are populated when the program runs"""
+        synt_accessions_start_range_list = []
+        synt_accessions_end_range_list = []
+        synt_protein_id_range_list = []
+        synt_protein_name_range_list = []
+        synt_strand_range_list = []
+
+        """(11) the script parses the associated gb file (which should have been saved by the program in the folder of
+           choosing), to extract nucleotide accession organism, nucleotide accession source (source == organism most of
+           the time), all CDS/protein ids, their start and end nts, CDS/protein names and strand of each CDS/protein."""
+        gb_file_2 = str(nuc_acc_2) + '.gb.txt'
+        nuc_acc_organism_2, nuc_acc_source_2, feature_start_list_2, feature_end_list_2, protein_id_list_2, \
+        protein_name_list_2, feature_strand_list_2 = parse_gb_file(folder, gb_file_2)
+
+
+        """********* can save this data to a file *********"""
+
+        """Individual data are recorded as lines"""
+        # line1 = str(nuc_acc_2) + '\n'
+        # line2 = str(prot_acc_to_use[i]) + '\n'
+        # line3 = str(original_acc_to_use[i]) + '\n'
+        # line4 = str(nuc_acc_organism_2) + '\n'
+        # line5 = str(nuc_acc_source_2) + '\n'
+
+        """Generates a table with columns headed: protein ids, protein names, feature start, feature end, and strand"""
+        # keep_data = dataframe_temp(protein_id_list_2, protein_name_list_2, feature_start_list_2, feature_end_list_2,
+        #                            feature_strand_list_2)
+
+        """Generate a file name according to the protein/homolog accession used"""
+        # new_temp_file_name = str('*' + prot_acc_to_use[i] + '_temp')
+
+        """Record data to a file: the above five lines + table"""
+        # record_data_to_file(folder, new_temp_file_name, line1, line2, line3, line4, line5, keep_data)
+
+
+        """can print to visualise: a nucleotide accession, its related organism, source, list of ALL ORFs present in
+           that nucleotide accession, protein/feature name, protein/feature strand, and protein/feature start and end
+           nts (all from section 11)"""
+        # print('\n======\n')
+        # print(nuc_acc_2)
+        # print(nuc_acc_organism_2)
+        # print(nuc_acc_source_2)
+        # print(protein_id_list_2)
+        # print(protein_name_list_2)
+        # print(feature_strand_list_2)
+        # print(feature_start_list_2)
+        # print(feature_end_list_2)
+        # print('\n======\n')
+
+        """------------------------------------------------------------------------------"""
+        """(12) Finds PROTEIN/HOMOLOG start and end positions in FEATURE START/END lists (generated in section 10) using
+           the looked up index from the PROTEIN INDEX TO USE list (generated in section 9(e)). The relevant PROTEIN
+           INDEX (aka protein position in the nucleotide accession) is looked up using [i] (used as an index position
+           through iteration) in the relevant "list_to_use". Reminder: items in nuc_acc_to_use[x], prot_acc_to_use[x],
+           prot_index_to_use[x] correspond to each other through 'x' index/position in the list."""
+        homolog_start = feature_start_list_2[prot_index_to_use[i]]
+        homolog_end = feature_end_list_2[prot_index_to_use[i]]
+
+        """------------------------------------------------------------------------------"""
+        """(13) Using the HOMOLOG INDEX/POSITION, a gene cluster range to be visualised is determined.
+           The following calculations determine what happens if there are fewer ORFs upstream or downstream than what
+           the user has entered: if there are fewer ORFs upstream, the first ORF in range will be at position 0;
+           if there are fewer ORFs downstream, the last ORF in range will be the last ORF in the list."""
+
+
+        """In case where the homolog strand is '-1' and to ensure the ORF ranges are added correctly (upstream /
+           downstream of the homolog), the input numbers are switched, i.e. n is used for upstream and m for downstream
+           in the calculations. To ensure gene clusters are aligned, the sequence for the -1 homolog needs to be
+           'flipped'."""
+        if feature_strand_list_2[prot_index_to_use[i]] == -1:
+
+            """This calculates the number of ORFs to be added upstream of the homolog"""
+            """here m is swapped with n, to ensure the correct number of ORFs is added upstream of the homolog"""
+            """if the input number leads to less than 0 ORFs upstream"""
+            if prot_index_to_use[i]-n < 0:
+
+                """the minimum index p becomes 0"""
+                p = 0
+
+                """looks up the upstream start nt at index p=0"""
+                upstream_nt_start = feature_start_list_2[p]
+
+            else:
+                """Alternatively, the input number n is used to create the desired range upstream"""
+                p = prot_index_to_use[i]-n
+
+                """looks up the upstream start nt at index p"""
+                upstream_nt_start = feature_start_list_2[p]
+
+            """This calculates the number of ORFs to be added downstream of the homolog"""
+            """here n is swapped with m, to ensure the correct number of ORFs is added downstream of the homolog"""
+            """if the input number leads to more than there are ORFs downstream"""
+            if prot_index_to_use[i]+m > total_orfs_to_use[i]-1:
+
+                """the maximum index q becomes the maximum total of the ORFs in the genome"""
+                q = total_orfs_to_use[i]-1
+
+                """looks up the downstream end nt at index q=maximum in the genome"""
+                downstream_nt_end = feature_end_list_2[q]
+
+            else:
+                """Alternatively, the input number m is used to create the desired range downstream"""
+                q = prot_index_to_use[i]+m  # or keep as the desired input range
+
+                """looks up the downstream end nt at index q"""
+                downstream_nt_end = feature_end_list_2[q]
+
+        else:
+            """------------------------------------------------------------------------------"""
+            """Where strand is 1 or 0 the input numbers for upstream / downstream of the homolog, correspond to the
+               input numbers as stated in the prompt, m is used for upstream and n for downstream range."""
+
+            """if the input number leads to less than 0 ORFs upstream"""
+            if prot_index_to_use[i]-m < 0:
+
+                """the minimum index p becomes 0"""
+                p = 0
+
+                """looks up the upstream start nt at index p=0"""
+                upstream_nt_start = feature_start_list_2[p]
+
+            else:
+                """Alternatively, use the input number m is used to create the desired range upstream"""
+                p = prot_index_to_use[i]-m
+
+                """looks up the upstream start nt at index p"""
+                upstream_nt_start = feature_start_list_2[p]
+
+            """if the input number leads to more than there are ORFs downstream"""
+            if prot_index_to_use[i]+n > total_orfs_to_use[i]-1:
+
+                """the maximum index q becomes the maximum total of the ORFs in the genome"""
+                q = total_orfs_to_use[i]-1
+
+                """looks up the downstream end nt at index q=maximum in the genome"""
+                downstream_nt_end = feature_end_list_2[q]
+
+            else:
+                """Alternatively, the input number n is used to create the desired range downstream"""
+                q = prot_index_to_use[i]+n
+
+                """looks up the downstream end nt at index q"""
+                downstream_nt_end = feature_end_list_2[q]
+
+        """generates protein index/position range to lookup within the genome nucleotide accession"""
+        synt_accessions_index_range = range(p, q + 1, 1)
+
+        """can print to visualise range"""
+        # print(synt_accessions_index_range)
+
+
+        """------------------------------------------------------------------------------"""
+        """(14) For each ORF in the gene cluster range, the key data (feature start/end nts, protein id, protein name
+           and protein strand) is looked up/calculated and appended to lists."""
+
+        """For each entry in the index range list, for each nucleotide accession, the script finds and appends feature/
+           protein start/end nts, protein ids, protein name and strand. Where strand is -1, the ORF direction is
+           reversed to be 1."""
+        for syn_acc_index_range in synt_accessions_index_range:
+            synt_accessions_start_range_list.append(feature_start_list_2[syn_acc_index_range])
+            synt_accessions_end_range_list.append(feature_end_list_2[syn_acc_index_range])
+            synt_protein_id_range_list.append(protein_id_list_2[syn_acc_index_range])
+            synt_protein_name_range_list.append(protein_name_list_2[syn_acc_index_range])
+            if feature_strand_list_2[prot_index_to_use[i]] == -1:
+                synt_strand_range_list.append(-1 * feature_strand_list_2[syn_acc_index_range])
+            else:
+                synt_strand_range_list.append(feature_strand_list_2[syn_acc_index_range])
+
+        """Master lists for lists with feature/protein start/end nts, protein ids, protein name and strand are
+           populated. Each list is a LIST OF LISTS, containing data of all ORFs in all nucleotide accessions."""
+        synt_accessions_start_range_list_of_lists.append(synt_accessions_start_range_list)
+        synt_accessions_end_range_list_of_lists.append(synt_accessions_end_range_list)
+        synt_protein_id_range_list_of_lists.append(synt_protein_id_range_list)
+        synt_protein_name_range_list_of_lists.append(synt_protein_name_range_list)
+        synt_strand_range_list_of_lists.append(synt_strand_range_list)
+
+        """Master lists for ORF index start (p), ORF index end (q), gene cluster size and organism name are populated.
+        """
+        p_list.append(p)
+        q_list.append(q)
+        gene_cluster_size_list.append(downstream_nt_end - upstream_nt_start)
+        organism_list.append(nuc_acc_organism_2)
+
+        """Depending on ORF strand ('+'/'1' or '-'/'-1'), homolog start, homolog end, gene cluster upstream nt start and
+           downstream nt end lists are populated, and the difference between a gene cluster upstream start nt and a
+           homolog start, and the difference between the homolog end and the gene cluster downstream end nt are
+           calculated and appended."""
+        if feature_strand_list_2[prot_index_to_use[i]] == -1:
+            homolog_start_list.append(homolog_end)
+            homolog_end_list.append(homolog_start)
+            upstream_nt_start_list.append(downstream_nt_end)
+            downstream_nt_end_list.append(upstream_nt_start)
+            diff_homolog_start_to_upstream_start_list.append(downstream_nt_end - homolog_end)
+            diff_homolog_end_to_downstream_start_list.append(homolog_start - upstream_nt_start)
+        else:
+            homolog_start_list.append(homolog_start)
+            homolog_end_list.append(homolog_end)
+            upstream_nt_start_list.append(upstream_nt_start)
+            downstream_nt_end_list.append(downstream_nt_end)
+            diff_homolog_start_to_upstream_start_list.append(homolog_start - upstream_nt_start)
+            diff_homolog_end_to_downstream_start_list.append(downstream_nt_end - homolog_end)
+
+        """can print to visualise: gene neighbourhood upstream/downstream indices, homolog start/end, gene neighbourhood nt start/end, as well as gene neighbourhood index range, gene neighbourhood ORF start and end range, gene neighbourhood ORF ID, name and strand range."""
+        # print('\n======\n')
+        # print('gene neighbourhood upstream index: ' + str(p))
+        # print('gene neighbourhood downstream index: ' + str(q))
+        # print('Homolog start: ' + str(homolog_start))
+        # print('Homolog end: ' + str(homolog_end))
+        # print('gene neighbourhood nt to start: ' + str(upstream_nt_start))
+        # print('gene neighbourhood nt to end: ' + str(downstream_nt_end))
+        # print('\n======\n')
+        # print('gene neighbourhood Accessions Index Range:')
+        # print(synt_accessions_index_range)
+        # print('gene neighbourhood Accessions Start Range:')
+        # print(synt_accessions_start_range_list)
+        # print('gene neighbourhood Accessions End Range:')
+        # print(synt_accessions_end_range_list)
+        # print('gene neighbourhood ORF ID Range:')
+        # print(synt_protein_id_range_list)
+        # print('gene neighbourhood ORF Name Range:')
+        # print(synt_protein_name_range_list)
+        # print('gene neighbourhood ORF Strand Range:')
+        # print(synt_strand_range_list)
+        # print('\n======\n')
+
+        """+1 is added to 'i' variable per each FOR LOOP, to keep track of list indices"""
+        i = i + 1
+
+    """can print to visualise lists of ORF index start (p), ORF index end (q), homolog start/end, and gene cluster
+       upstream and downstream nts"""
+    # print('\n======\n')
+    # print(p_list)
+    # print(homolog_start_list)
+    # print(upstream_nt_start_list)
+    # print('\n======\n')
+    # print(q_list)
+    # print(homolog_end_list)
+    # print(downstream_nt_end_list)
+    # print('\n======\n')
+
+    """can print to visualise lists of gene cluster size, organism name and the difference between a gene cluster
+       upstream start nt and a homolog start, and the homolog end and the gene cluster downstream end nt, as well as
+       lists of gene neighbourhood start/end and strand per each nucleotide accession"""
+    # print(gene_cluster_size_list)
+    # print(diff_homolog_start_to_upstream_start_list)
+    # print(diff_homolog_end_to_downstream_start_list)
+    # print(organism_list)
+    # print(synt_accessions_start_range_list_of_lists)
+    # print(synt_accessions_end_range_list_of_lists)
+    # print(synt_strand_range_list_of_lists)
+    # print('\n======\n')
+
+
+    """----------------------------------------------------------------------------------"""
+    """(15) Using a Biopython Module GenomeDiagram, a gene neighbourhood diagram is drawn and saved to a file."""
+
+    """name for the file with gene neighbourhood"""
+    fileW = "Gene_NBHD_new.PDF"
+
+    """pathway for the file with the gene neighbourhood"""
+    pathwayW = folder + fileW
+
+    """Diagram name"""
+    name = "gene neighbourhood"
+    gd_diagram = GenomeDiagram.Diagram(name)
+
+    """To count the number of iterations within the FOR LOOP (see below), to keep track of list indices, a 't'
+       variable is introduced here"""
+    t = 0  # do not move
+
+    """can print a list of all nucleotide accessions for the selected homologs to be used"""
+    # print(nuc_acc_to_use)
+
+    """For each nucleotide accession in the list of all nucleotide accessions, ..."""
+    for nuc_acc_3 in nuc_acc_to_use:
+
+        """...determine a name of a nucleotide accession file with the corresponding name..."""
+        gb_file_3 = str(nuc_acc_3) + '.gb.txt'
+
+        """...determine a pathway of a nucleotide accession file with the corresponding name..."""
+        pathwayR = folder + gb_file_3
+
+        """...read genbank record using SeqIO module..."""
+        record = SeqIO.read(pathwayR, "genbank")
+
+        """...parse data (organism, source, ORF start/end, ORF ID/name and strand) as lists into variables..."""
+        nuc_acc_organism_3, nuc_acc_source_3, feature_start_list_3, feature_end_list_3, protein_id_list_3, \
+            protein_name_list_3, feature_strand_list_3 = parse_gb_file(folder, gb_file_3)
+
+        """...determine INDEX of the nucleotide accession (in the list of all nucleotide accessions)..."""
+        local_prot_index = prot_index_to_use[nuc_acc_to_use.index(nuc_acc_3)]
+
+        """can print the nucleotide accession INDEX"""
+        # print(local_prot_index)
+
+        """...determine homolog strand (+ or -) in the given nucleotide accession..."""
+        feature_strand_query = feature_strand_list_3[local_prot_index]
+
+        """can print the strand for the homolog in the given nucleotide accession"""
+        # print(feature_strand_query)
+
+        """---------------------------"""
+        """...add a New Track to the Diagram"""
+        gd_track_for_features = gd_diagram.new_track(
+            1,
+            hide=0, # HIDE is a Boolean specifying whether the track should be drawn or not (default=0). Only tracks
+            # with hide=0 are listed by the GDDiagram method get drawn levels().
+            track_size=1,
+            name=organism_list[t], # NAME is a short descriptive string
+            greytrack=True, # GREYTRACK is a Boolean specifying whether the track should include a grey background
+            # (useful for delineating many closely-spaced tracks), and a set of foreground labels (default=0).
+            start=0,
+            end=max(gene_cluster_size_list),
+            greytrack_labels=1, # GREYTRACK_LABELS is an integer specifying the number of foreground labels that should
+            # be included on the track (default=5).
+            greytrack_fontsize=20, # GREYTRACK_FONTSIZE is an integer specifying the size of font to be used on the
+            # foreground labels (default=8).
+            greytrack_font='Helvetica', # GREYTRACK_FONT is a string specifying the name of the font to be used for the
+            # foreground labels. Not all machines will provide the same font selection (default='Helvetica')
+            greytrack_font_rotation=0, # GREYTRACK_FONT_ROTATION is an integer specifying the angle in degrees through
+            # which to rotate the foreground labels, which are, by default, radial in circular diagrams and collinear
+            # with the track for linear diagrams (deafult=0).
+            greytrack_font_colour=colors.Color(0.1,0.1,0.1), # GREYTRACK_FONT_COLOUR is a ReportLab colors.Color object
+            # defining the colour of the foreground labels (default=colors.Color(0.6,0.6,0.6)).
+            height=0.7, # HEIGHT is a float denoting the height of the track, relative to other tracks on the diagram
+            # (default=1)
+            scale=0, # SCALE is a Boolean defining whether the track will carry a scale (default=1).
+            # SCALE_COLOUR is a ReportLab colors.Color object defining the colour of the scale (default=colors.black).
+            # SCALE_FONT is a string specifying the font to use on the scale; not all machines provide the same
+            # selection (default='Helvetica').
+            # SCALE_FONTSIZE is an integer specifying the size of font to use for the scale (default=6).
+            # SCALE_FONTANGLE is an integer specifying the angle, in degrees, through which to rotate the scale labels
+            # relative, on circular diagrams, to the tangent to the scale at that point or, on linear diagrams, to the
+            # scale itself (default=45).
+            # SCALE_TICKS is a Boolean denoting whether any ticks will be shown on the scale (default=1).
+            # SCALE_LARGETICKS is a float describing the height of the large tick set as a proportion of half the track
+            # height. Positive values run 'upwards' (linear) or away from the centre of the diagram (circular), while
+            # negative values run in the opposite direction (default=0.5).
+            # SCALE_SMALLTICKS is a float describing the height of the small tick set as a proportion of half the track
+            # height. Positive values run 'upwards' (linear) or away from the centre of the diagram (circular), while
+            # negative values run in the opposite direction (default=0.3).
+            # SCALE_LARGETICK_INTERVAL is an integer specifying the interval between large ticks as a number of bases
+            # (default=1000000).
+            # SCALE_SMALLTICK_INTERVAL is an integer specifying the interval between smallticks as a number of bases
+            # (default=10000).
+            # SCALE_LARGETICK_LABELS is a Boolean describing whether labels marking tick position will be placed over
+            # every large tick (default=1).
+            # SCALE_SMALLTICK_LABELS is a Boolean describing whether labels marking tick position will be places over
+            # every small tick (default=0).
+        )
+
+        """---------------------------"""
+
+        """...to each new Diagram Track, add a New Set..."""
+        """Creates a new GDFeatureSet (type='feature') or GDGraphSet (type='graph') object, adds it to the track, then
+        returns it to the user so that features may be added."""
+        gd_feature_set = gd_track_for_features.new_set()
+
+        """To count the number of iterations within the FOR LOOP (see below), to keep track of list indices, a 'j'
+           variable is introduced here"""
+        j = 0
+
+        """...for each feature in the nucleotide accession..."""
+        for feature in record.features:
+
+            """...if the feature is a coding sequence..."""
+            if feature.type == "CDS":
+
+                """...and if the [feature start location] is within the [synt_accessions_start_range_list] which
+                   corresponds to the nucleotide accession in question..."""
+                if feature.location.start.position in synt_accessions_start_range_list_of_lists[t]:
+
+                    """the DISTANCE between [the current homolog start nt and its gene cluster start] and the MAX
+                       DISTANCE between [all homolog start nts to their gene cluster start] is calculated"""
+                    homolog_start_diff = max(diff_homolog_start_to_upstream_start_list) - diff_homolog_start_to_upstream_start_list[t]
+
+                    """if the eature strand is '-'"""
+                    if feature_strand_query == -1:
+
+                        """then when adding the new feature to the diagram, the ORF start and end positions are inverted
+                        (to flip the strand)"""
+                        new_feature = SeqFeature(
+                            FeatureLocation(-feature.location.end.position + upstream_nt_start_list[t] + homolog_start_diff,
+                                            -feature.location.start.position + upstream_nt_start_list[t] + homolog_start_diff),
+                            strand=synt_strand_range_list_of_lists[t][j]
+                            )
+                    else:
+                        """if the eature strand is '+'"""
+                        """then when adding the 'new feature' to the diagram, the default ORF start and end positions
+                           will be used"""
+                        new_feature = SeqFeature(
+                            FeatureLocation(feature.location.start.position - upstream_nt_start_list[t] + homolog_start_diff,
+                                        feature.location.end.position - upstream_nt_start_list[t] + homolog_start_diff),
+                            strand=synt_strand_range_list_of_lists[t][j]
+                            )
+
+                    """---------------------------"""
+
+                    """if the ORF strand is "-" or "+", the ORF arrow direction will be in line with the strand
+                       direction"""
+                    if synt_strand_range_list_of_lists[t][j] == -1 or 1:
+                        arrowhead_l = 0.3
+                    else:
+                        """otherwise the ORF will be a rectangle, without the arrow"""
+                        arrowhead_l = 0
+
+                    """---------------------------"""
+
+                    """for the diagram, assign an ORF name"""
+                    protein_name = str(synt_protein_name_range_list_of_lists[t][j])
+
+                    """assign an ORF colour"""
+                    feature_color = 'white'
+
+                    """assign an ORF label size"""
+                    label_s = 20
+
+                    """---------------------------"""
+
+                    """for each ORF name containing a term specified in the dictionary above, substitute the ORF name
+                       with the name provided in the dictionary and change colour to that provided in the dictionary"""
+                    for key_1, value_1 in NAME_COLOUR_DICT.items():
+                        if re.search(key_1, protein_name):
+                            protein_name = value_1[0]
+                            feature_color = value_1[1]
+                        else:
+                            pass
+
+                    """---------------------------"""
+
+                    """for each ORF name containing a term specified in the dictionary above, replace the term with
+                       the term provided in the dictionary, but keep the ORF name"""
+                    for key_2, value_2 in REPLACEMENT_DICT.items():
+                        if re.search(key_2, protein_name):
+                            protein_name = protein_name.replace(str(value_2[0]), str(value_2[1]))
+                        else:
+                            pass
+
+                    """---------------------------"""
+
+                    protein_name = protein_name.split("(")[0]
+                    protein_name = protein_name.split("/")[0]
+                    protein_name = protein_name.split(",")[0]
+
+                    """---------------------------"""
+
+                    """for ORF names with over 21 characters, truncate the name to 21 characters"""
+                    if len(protein_name) > 21:
+                        protein_name = protein_name[:21]
+                    else:
+                        pass
+
+                    """---------------------------"""
+
+                    """for ORF names == 'hypothetical' reduce arrow height and hide labels"""
+                    if protein_name == 'hypothetical':
+                        arrowshaft_h = 0.2
+                        label_show = False
+                    else:
+                        arrowshaft_h = 1.0
+                        label_show = True
+
+                    """---------------------------"""
+
+                    """adds each Feature/ORF to the Diagram Track"""
+                    gd_feature_set.add_feature(
+                        new_feature,
+                        sigil="BIGARROW", # can also be sigil="arrow" - shows arrows on their respective '+' and "-" strands
+                        color=feature_color,
+                        arrowshaft_height=arrowshaft_h,
+                        arrowhead_length=arrowhead_l,
+                        border=colors.black,
+                        name=protein_name,
+                        label_strand=1,
+                        label=label_show,
+                        label_size=label_s,
+                        label_angle=20,
+                        label_position="middle", # label_position="middle"/"start"/"end"
+                        label_color="black",
+                        )
+                    """+1 is added to 'j' variable per each ORF in list FOR LOOP, to keep track of list indices"""
+                    j = j + 1
+
+        """+1 is added to 't' variable per each FOR LOOP for the nucleotide accessions, to keep track of list indices"""
+        t = t + 1
+
+    print ('\ngene neighbourhood for ' + str(t) + ' homologs')
+
+    if m + n + 1 < 15:
+        w = 80
+    else:
+        w = 100
+
+    gd_diagram.draw(
+        format="linear", # FORMAT is either 'circular' or 'linear'
+        orientation="landscape", # ORIENTATION is either 'landscape' or 'portrait' and refers to the orientation of the
+        # page on which the diagram sits, not the format of the image itself (default='landscape')
+        pagesize=(w * cm, (t * 6.5) * cm), # PAGESIZE should be either a tuple of floats as (page width, page height)
+        # in pixels, or a string denoting a recognised ISO page size, such as 'A4', 'LEGAL', 'LETTER', etc.
+        # (default='A3')
+        fragments=1, # FRAGMENTS is an integer specifying how many sections the sequence should be divided into on a
+        # linear diagram. This is necessary for clarity, to avoid unreadable compression of diagram information in
+        # the X direction (default=10).
+        fragment_size=1, # fragment size is a float specifying what proportion of the vertical space available to each
+        # fragment should be taken up by the drawing of the fragment (default=0.9).
+        tracklines=0, # TRACKLINES is a Boolean indicating whether a set of lines delineating each track should be
+        # superimposed on the diagram (default=0)
+        start=0, # START is an int indicating the base position from which to begin drawing the diagram.
+        end=max(gene_cluster_size_list), # END is in int indicating the base position at which to stop drawing the
+        # diagram.
+        x=0.1, # x is a float indicating the size of the X (vertical) margins as a proportion of the whole page
+        # (default=0.05)
+        y=0.1, # y is a float indicating the size of the Y (horizontal(margins as a proportion of the whole page
+        # (default=0.05)
+        track_size=0.45, # TRACK_SIZE is a float specifying what proportion of the vertical space available to each
+        # track should be taken up by the drawing of the track (default=0.75)
+        # xl is a float indicating the size of the left X margin, as a proportion of the whole page. If specified,
+        # this overrides the parameter x
+        # xr is a float indicating the size of the right X margin, as a proportion of the whole page. If specified,
+        # this overrides the parameter x
+        # yt is a float indicating the size of the top Y margin, as a proportion of the whole page. If specified,
+        # his overrides the parameter y
+        # yb is a float indicating the size of the bottom Y margin, as a proportion of the whole page. If specified,
+        # this overrides the parameter y
+        # circular is a Boolean value describing whether the sequence to be drawn is circular or not - this is only
+        # directly relevant to circular diagrams.
+        )
+
+    """write a Diagram to a file"""
+    gd_diagram.write(pathwayW, "PDF")
+
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+"""------------------------------------------------------------------------------------------------------------------"""
+
+"""RUNS/EXECUTES THE PROGRAMME"""
+
+main()
