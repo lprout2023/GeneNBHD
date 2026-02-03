@@ -19,7 +19,7 @@
 """ neighbourhoods. The size ratios between all ORFs are real. For large lists, or where there are many
 """ identical proteins for a single entry in the NCBI database, there may be delays as the processing is
 """ subject to data download and internet/intranet speed.
-""" The script was written in 2017 using PyCharm virtual environment 2018.2.3. (Community edition), using Python 2.7 as the Project Interpreter.
+""" The script was written in 2018 using PyCharm virtual environment 2018.2.3. (Community edition), using Python 2.7 as the Project Interpreter.
 
 
 """------------------------------------------------------------------------------------------------------------------"""
